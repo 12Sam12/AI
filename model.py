@@ -88,9 +88,17 @@ class AGENT(nn.Module):
         positions = torch.arange(t, device=idx.device)
         x = self.token_embedding(idx) + self.position_embedding(positions)[None, :, :]
         x = self.blocks(x)
-        logits = self.lm_head(self.ln(x))
+        x = self.ln(x)
+        logits = self.lm_head(x)
 
         loss = None
         if targets is not None:
-            loss = nn.functional.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+            loss = nn.functional.cross_entropy(
+                logits.reshape(-1, logits.size(-1)), targets.reshape(-1)
+            )
         return logits, loss
+
+
+if __name__ == "__main__":
+    import runpy
+    runpy.run_module("agent", run_name="__main__")
