@@ -1,11 +1,18 @@
-"""Small local persistent memory for AGENT.
-
-No API or cloud service is used. Memories are stored in memory.json.
-"""
+"""Persistent local memory for AGENT. No API or cloud service is used."""
 import json
 from pathlib import Path
 
 MEMORY_PATH = Path("memory.json")
+ALIASES = {
+    "favorite language": "favorite computing language",
+    "programming language": "favorite computing language",
+    "name": "name",
+}
+
+
+def _canonical(key):
+    key = " ".join(key.lower().strip().split())
+    return ALIASES.get(key, key)
 
 
 def load_memory():
@@ -23,14 +30,14 @@ def save_memory(memory):
 
 def remember(key, value):
     memory = load_memory()
-    memory[key] = value
+    key = _canonical(key)
+    memory[key] = value.strip()
     save_memory(memory)
-    return f"I'll remember that {key} is {value}."
+    return f"I'll remember that your {key} is {value.strip()}."
 
 
 def recall(key):
-    memory = load_memory()
-    return memory.get(key)
+    return load_memory().get(_canonical(key))
 
 
 def all_memory():
