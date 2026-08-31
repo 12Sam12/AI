@@ -2,7 +2,7 @@ from pathlib import Path
 import re
 import torch
 from model import AGENT, AGENTConfig
-from tools import choose_tool, open_website
+from tools import choose_tool, open_website, open_application
 from memory import remember, recall, all_memory
 
 MODEL_PATH = Path("agent_model.pt")
@@ -34,29 +34,35 @@ def generate(model, stoi, itos, prompt, max_new_tokens=150):
     return "".join(itos[int(i)] for i in idx[0])
 
 
+def clean_key(key):
+    key = key.strip().lower()
+    key = re.sub(r"^(?:my|the)\s+", "", key)
+    key = re.sub(r"[?!.]+$", "", key)
+    return key
+
+
 def memory_command(text):
     t = text.strip()
     low = t.lower()
-    if low in {"what do you remember", "what do you remember?", "show my memories"}:
+    if low in {"what do you remember", "what do you remember?", "show my memories", "show memories"}:
         memories = all_memory()
         if not memories:
             return "I don't have any saved memories yet."
         return "I remember: " + "; ".join(f"{k}: {v}" for k, v in memories.items())
 
     patterns = [
-        r"^remember (?:that )?my (.+?) is (.+)$",
-        r"^remember (?:that )?my (.+?) are (.+)$",
-        r"^remember (?:that )?(.+?) is (.+)$",
+        r"^remember\s+(?:that\s+)?my\s+(.+?)\s+is\s+(.+)$",
+        r"^remember\s+(?:that\s+)?(.+?)\s+is\s+(.+)$",
     ]
     for pattern in patterns:
-        match = re.match(pattern, low, re.IGNORECASE)
+        match = re.match(pattern, t, re.IGNORECASE)
         if match:
             key, value = match.groups()
-            return remember(key, value)
+            return remember(clean_key(key), value)
 
-    match = re.match(r"^(?:what(?:'s| is) my|what is my) (.+?)[?]?$", low)
+    match = re.match(r"^(?:what(?:'s| is)\s+my|what\s+is\s+my)\s+(.+?)[?]?$", t, re.IGNORECASE)
     if match:
-        key = match.group(1).strip()
+        key = clean_key(match.group(1))
         value = recall(key)
         if value:
             return f"Your {key} is {value}."
@@ -64,36 +70,53 @@ def memory_command(text):
     return None
 
 
-def multi_action(text):
-    """Handle simple chains such as 'open Chrome and open YouTube'."""
-    parts = re.split(r"\s+(?:and then|then|and)\s+", text, flags=re.IGNORECASE)
-    if len(parts) < 2:
-        return None
-    results = []
-    handled = 0
-    for part in parts:
-        tool = choose_tool(part)
-        if tool:
-            function, args = tool
-            results.append(function(*args))
-            handled += 1
-            continue
-        match = re.match(r"open (?:the )?(?:website |site )?(.+?)(?: in chrome)?$", part.strip(), re.IGNORECASE)
-        if match and not part.lower().strip() == "open chrome":
-            target = match.group(1).strip()
-            if target.lower() in {"my toddle", "toddle"}:
-                target = "https://toddleapp.com"
-            elif not target.startswith(("http://", "https://")):
-                target = "https://www.google.com/search?q=" + target.replace(" ", "+")
-            results.append(open_website(target))
-            handled += 1
-    return " ".join(results) if handled else None
+def website_target(target):
+    target = target.strip()
+    lower = target.lower()
+    known = {
+        "toddle": "https://toddleapp.com",
+        "my toddle": "https://toddleapp.com",
+        "youtube": "https://www.youtube.com",
+        "google": "https://www.google.com",
+    }
+    if lower in known:
+        return known[lower]
+    if target.startswith(("http://", "https://")):
+        return target
+    if "." in target and " " not in target:
+        return "https://" + target
+    return "https://www.google.com/search?q=" + target.replace(" ", "+")
+
+
+def action_command(text):
+    t = text.strip()
+    low = t.lower()
+
+    # Compound action: open/launch an app and then a destination.
+    chrome_destination = re.search(r"(?:open|go to|launch)\s+(?:my\s+)?(.+?)\s+in\s+(?:google\s+)?chrome\b", t, re.IGNORECASE)
+    if chrome_destination:
+        target = chrome_destination.group(1).strip()
+        open_application("chrome")
+        return open_website(website_target(target))
+
+    direct_destination = re.match(r"^(?:open|go to|launch)\s+(?:my\s+)?(.+?)\s*$", t, re.IGNORECASE)
+    if direct_destination:
+        target = direct_destination.group(1).strip()
+        if target.lower() in {"chrome", "google chrome"}:
+            return open_application("chrome")
+        if target.lower() in {"vscode", "vs code", "visual studio code"}:
+            return open_application("vscode")
+        return open_website(website_target(target))
+
+    if low in {"open web", "open the web", "open browser", "open google"}:
+        return open_website("https://www.google.com")
+    return None
 
 
 def main():
     model, stoi, itos = load_agent()
-    print("AGENT 0.5 online. Type 'exit' to shut down.")
-    print("Memory + tools enabled. Memories stay local in memory.json.")
+    print("AGENT 0.6 online. Type 'exit' to shut down.")
+    print("Memory + intent parser + safe tools enabled.")
     while True:
         user = input("You: ").strip()
         if user.lower() == "exit":
@@ -102,14 +125,14 @@ def main():
         if not user:
             continue
 
-        memory_result = memory_command(user)
-        if memory_result:
-            print(f"AGENT: {memory_result}")
+        result = memory_command(user)
+        if result:
+            print(f"AGENT: {result}")
             continue
 
-        action_result = multi_action(user)
-        if action_result:
-            print(f"AGENT: {action_result}")
+        result = action_command(user)
+        if result:
+            print(f"AGENT: {result}")
             continue
 
         tool = choose_tool(user)
