@@ -1,6 +1,7 @@
 from pathlib import Path
 import torch
 from model import AGENT, AGENTConfig
+from tools import choose_tool
 
 MODEL_PATH = Path("agent_model.pt")
 
@@ -10,7 +11,6 @@ def load_agent():
         print("AGENT has not been trained yet.")
         print("Run: python train.py")
         raise SystemExit(1)
-
     checkpoint = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
     config = AGENTConfig(checkpoint["config"]["vocab_size"])
     model = AGENT(config)
@@ -23,21 +23,19 @@ def generate(model, stoi, itos, prompt, max_new_tokens=150):
     unknown = next(iter(stoi.values()))
     ids = [stoi.get(ch, unknown) for ch in prompt]
     idx = torch.tensor([ids], dtype=torch.long)
-
     with torch.no_grad():
         for _ in range(max_new_tokens):
             context = idx[:, -model.config.block_size:]
             logits, _ = model(context)
             next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
             idx = torch.cat((idx, next_token), dim=1)
-
     return "".join(itos[int(i)] for i in idx[0])
 
 
-if __name__ == "__main__":
+def main():
     model, stoi, itos = load_agent()
-    print("AGENT online. Type 'exit' to shut down.")
-
+    print("AGENT 0.3 online. Type 'exit' to shut down.")
+    print("Tools: clock, Chrome, VS Code, web, system info")
     while True:
         user = input("You: ").strip()
         if user.lower() == "exit":
@@ -46,9 +44,22 @@ if __name__ == "__main__":
         if not user:
             continue
 
+        # Deterministic tool routing happens before language generation.
+        # This prevents the small model from hallucinating that an action happened.
+        tool = choose_tool(user)
+        if tool:
+            function, args = tool
+            result = function(*args)
+            print(f"AGENT: {result}")
+            continue
+
         prompt = f"USER: {user}\nAGENT:"
         output = generate(model, stoi, itos, prompt)
         response = output.split("AGENT:", 1)[-1]
         if "USER:" in response:
             response = response.split("USER:", 1)[0]
         print("AGENT:" + response)
+
+
+if __name__ == "__main__":
+    main()
